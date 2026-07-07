@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 รันมอเตอร์ 4 ตัวพร้อมกัน บน Raspberry Pi 3
-ใช้ L298N 2 บอร์ด (บอร์ดละ 2 มอเตอร์)
-- บอร์ด 1: Motor A, Motor B
-- บอร์ด 2: Motor C, Motor D
+- Motor A, B -> ขับผ่าน L298N
+- Motor C, D -> ขับผ่าน BTS7960 (คนละบอร์ด)
+
+รันแล้วมอเตอร์ทั้ง 4 ตัวจะหมุนไปข้างหน้าพร้อมกันตามเวลาที่กำหนด แล้วหยุดเอง
 """
 
 import RPi.GPIO as GPIO
@@ -11,17 +12,18 @@ import time
 
 # ========================= ผังพิน GPIO =========================
 
-# บอร์ด 1
+# L298N: Motor A
 A_ENA, A_IN1, A_IN2 = 18, 23, 24
+# L298N: Motor B
 B_ENB, B_IN3, B_IN4 = 13, 27, 22
-
-# บอร์ด 2
-C_ENA, C_IN1, C_IN2 = 12, 5, 6
-D_ENB, D_IN3, D_IN4 = 16, 21, 26
+# BTS7960 #1: Motor C
+C_RPWM, C_LPWM, C_R_EN, C_L_EN = 12, 19, 5, 6
+# BTS7960 #2: Motor D
+D_RPWM, D_LPWM, D_R_EN, D_L_EN = 16, 20, 21, 26
 
 PWM_FREQ = 1000
-RUN_TIME = 3
-SPEED = 70   # 0-100
+RUN_TIME = 3        # วิ่งกี่วินาที
+SPEED = 70           # ความเร็ว 0-100
 
 # ========================= ตั้งค่า GPIO =========================
 
@@ -29,37 +31,55 @@ GPIO.setmode(GPIO.BCM)
 GPIO.setwarnings(False)
 
 all_pins = [A_ENA, A_IN1, A_IN2, B_ENB, B_IN3, B_IN4,
-            C_ENA, C_IN1, C_IN2, D_ENB, D_IN3, D_IN4]
+            C_RPWM, C_LPWM, C_R_EN, C_L_EN,
+            D_RPWM, D_LPWM, D_R_EN, D_L_EN]
 
 for pin in all_pins:
     GPIO.setup(pin, GPIO.OUT)
 
+# เปิด enable ของ BTS7960 ค้างไว้ตลอด
+for en in [C_R_EN, C_L_EN, D_R_EN, D_L_EN]:
+    GPIO.output(en, GPIO.HIGH)
+
 pwm_A = GPIO.PWM(A_ENA, PWM_FREQ)
 pwm_B = GPIO.PWM(B_ENB, PWM_FREQ)
-pwm_C = GPIO.PWM(C_ENA, PWM_FREQ)
-pwm_D = GPIO.PWM(D_ENB, PWM_FREQ)
+pwm_C_R = GPIO.PWM(C_RPWM, PWM_FREQ)
+pwm_C_L = GPIO.PWM(C_LPWM, PWM_FREQ)
+pwm_D_R = GPIO.PWM(D_RPWM, PWM_FREQ)
+pwm_D_L = GPIO.PWM(D_LPWM, PWM_FREQ)
 
-for p in [pwm_A, pwm_B, pwm_C, pwm_D]:
+for p in [pwm_A, pwm_B, pwm_C_R, pwm_C_L, pwm_D_R, pwm_D_L]:
     p.start(0)
 
-# ========================= ฟังก์ชันแต่ละมอเตอร์ =========================
-
-def motor(pwm_obj, in1, in2, speed, forward=True):
-    GPIO.output(in1, GPIO.HIGH if forward else GPIO.LOW)
-    GPIO.output(in2, GPIO.LOW if forward else GPIO.HIGH)
-    pwm_obj.ChangeDutyCycle(abs(speed))
+# ========================= ฟังก์ชัน =========================
 
 def all_forward(speed):
-    motor(pwm_A, A_IN1, A_IN2, speed, True)
-    motor(pwm_B, B_IN3, B_IN4, speed, True)
-    motor(pwm_C, C_IN1, C_IN2, speed, True)
-    motor(pwm_D, D_IN3, D_IN4, speed, True)
+    # Motor A
+    GPIO.output(A_IN1, GPIO.HIGH)
+    GPIO.output(A_IN2, GPIO.LOW)
+    pwm_A.ChangeDutyCycle(speed)
+    # Motor B
+    GPIO.output(B_IN3, GPIO.HIGH)
+    GPIO.output(B_IN4, GPIO.LOW)
+    pwm_B.ChangeDutyCycle(speed)
+    # Motor C
+    pwm_C_R.ChangeDutyCycle(speed)
+    pwm_C_L.ChangeDutyCycle(0)
+    # Motor D
+    pwm_D_R.ChangeDutyCycle(speed)
+    pwm_D_L.ChangeDutyCycle(0)
 
 def stop_all():
-    for in_pin in [A_IN1, A_IN2, B_IN3, B_IN4, C_IN1, C_IN2, D_IN3, D_IN4]:
-        GPIO.output(in_pin, GPIO.LOW)
-    for p in [pwm_A, pwm_B, pwm_C, pwm_D]:
-        p.ChangeDutyCycle(0)
+    GPIO.output(A_IN1, GPIO.LOW)
+    GPIO.output(A_IN2, GPIO.LOW)
+    GPIO.output(B_IN3, GPIO.LOW)
+    GPIO.output(B_IN4, GPIO.LOW)
+    pwm_A.ChangeDutyCycle(0)
+    pwm_B.ChangeDutyCycle(0)
+    pwm_C_R.ChangeDutyCycle(0)
+    pwm_C_L.ChangeDutyCycle(0)
+    pwm_D_R.ChangeDutyCycle(0)
+    pwm_D_L.ChangeDutyCycle(0)
 
 # ========================= โปรแกรมหลัก =========================
 
@@ -76,7 +96,12 @@ except KeyboardInterrupt:
 
 finally:
     stop_all()
-    for p in [pwm_A, pwm_B, pwm_C, pwm_D]:
-        p.stop()
+    pwm_A.stop()
+    pwm_B.stop()
+    pwm_C_R.stop()
+    pwm_C_L.stop()
+    pwm_D_R.stop()
+    pwm_D_L.stop()
     GPIO.cleanup()
     print("เคลียร์ GPIO เรียบร้อย")
+
